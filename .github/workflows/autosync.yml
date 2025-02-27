@@ -54,8 +54,7 @@ jobs:
 
     - name: Clone luci-app-qbittorrent
       run: |
-        git clone --depth=1 https://github.com/sbwml/luci-app-qbittorrent.git luci-app-qbittorrent
-
+        git clone --depth=1 https://github.com/sbwml/luci-app-qbittorrent.git 
     - name: Commit changes (if any)
       run: |
         git add .
