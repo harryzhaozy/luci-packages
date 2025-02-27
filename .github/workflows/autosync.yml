@@ -14,19 +14,20 @@ jobs:
     steps:
     - name: Checkout current repository
       uses: actions/checkout@v3
+    
     - name: Set Git user info
       run: |
         git config user.name "harryzhaozy"
         git config user.email "harryzhaozy@hotmail.com"
 
-    #- name: Remove submodule luci-app-qbittorrent (if exists)
-    #  run: |
-    #    git submodule deinit -f luci-app-qbittorrent || true
-    #    rm -rf .git/modules/luci-app-qbittorrent || true
-    #    git rm -f luci-app-qbittorrent || true
-    #    rm -rf luci-app-qbittorrent || true
-    #    git commit -m "Remove submodule luci-app-qbittorrent" --allow-empty || true
-    #    git push || true
+    - name: Remove submodule luci-app-qbittorrent (if exists)
+      run: |
+        git submodule deinit -f luci-app-qbittorrent || true
+        rm -rf .git/modules/luci-app-qbittorrent || true
+        git rm -f luci-app-qbittorrent || true
+        rm -rf luci-app-qbittorrent || true
+        git commit -m "Remove submodule luci-app-qbittorrent" --allow-empty || true
+        git push || true
 
     - name: Clone and sparse checkout kwrt-packages
       run: |
@@ -36,12 +37,17 @@ jobs:
         git sparse-checkout set luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer
         cd ..
         for dir in luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer; do
-          if [[ "$(diff -qr kwrt-packages/$dir $dir)" ]]; then
-            echo "Changes detected in $dir, syncing..."
-            rm -rf $dir
-            mv kwrt-packages/$dir $dir
+          if [ -d "$dir" ]; then
+            if [[ "$(diff -qr kwrt-packages/$dir $dir)" ]]; then
+              echo "Changes detected in $dir, syncing..."
+              rm -rf $dir
+              mv kwrt-packages/$dir $dir
+            else
+              echo "No changes detected in $dir, skipping..."
+            fi
           else
-            echo "No changes detected in $dir, skipping..."
+            echo "Directory $dir does not exist, creating and syncing..."
+            mv kwrt-packages/$dir $dir
           fi
         done
         rm -rf kwrt-packages
@@ -50,12 +56,17 @@ jobs:
       run: |
         git clone --depth=1 https://github.com/sbwml/luci-app-qbittorrent.git temp_luci-app-qbittorrent
         for dir in luci-app-qbittorrent qbittorrent qt6base qt6tools rblibtorrent; do
-          if [[ "$(diff -qr temp_luci-app-qbittorrent/$dir $dir)" ]]; then
-            echo "Changes detected in $dir, syncing..."
-            rm -rf $dir
-            mv temp_luci-app-qbittorrent/$dir $dir
+          if [ -d "$dir" ]; then
+            if [[ "$(diff -qr temp_luci-app-qbittorrent/$dir $dir)" ]]; then
+              echo "Changes detected in $dir, syncing..."
+              rm -rf $dir
+              mv temp_luci-app-qbittorrent/$dir $dir
+            else
+              echo "No changes detected in $dir, skipping..."
+            fi
           else
-            echo "No changes detected in $dir, skipping..."
+            echo "Directory $dir does not exist, creating and syncing..."
+            mv temp_luci-app-qbittorrent/$dir $dir
           fi
         done
         rm -rf temp_luci-app-qbittorrent
@@ -65,7 +76,6 @@ jobs:
         git add .
         git diff --cached --quiet || git commit -m "Sync external repositories"
         git push
-        
    
         
     #- name: Commit changes (if any)
