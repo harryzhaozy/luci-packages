@@ -14,20 +14,20 @@ jobs:
     steps:
     - name: Checkout current repository
       uses: actions/checkout@v3
-     
+
     - name: Set Git user info
       run: |
         git config user.name "harryzhaozy"
         git config user.email "harryzhaozy@hotmail.com"
-    
-    #- name: Remove submodule luci-app-qbittorrent (if exists)
-    #  run: |
-    #    git submodule deinit -f luci-app-qbittorrent || true
-    #    rm -rf .git/modules/luci-app-qbittorrent || true
-    #    git rm -f luci-app-qbittorrent || true
-     #   rm -rf luci-app-qbittorrent || true
-     #   git commit -m "Remove submodule luci-app-qbittorrent" --allow-empty || true
-     #   git push || true
+        
+    - name: Remove submodule luci-app-qbittorrent (if exists)
+      run: |
+        git submodule deinit -f luci-app-qbittorrent || true
+        rm -rf .git/modules/luci-app-qbittorrent || true
+        git rm -f luci-app-qbittorrent || true
+        rm -rf luci-app-qbittorrent || true
+        git commit -m "Remove submodule luci-app-qbittorrent" --allow-empty || true
+        git push || true
 
     - name: Clone and sparse checkout kwrt-packages
       run: |
@@ -36,36 +36,39 @@ jobs:
         git sparse-checkout init --cone
         git sparse-checkout set luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer
         cd ..
-        mv kwrt-packages/luci-app-accesscontrol luci-app-accesscontrol
-        mv kwrt-packages/luci-app-airconnect luci-app-airconnect
-        mv kwrt-packages/luci-app-airplay2 luci-app-airplay2
-        mv kwrt-packages/luci-app-argon-config luci-app-argon-config
-        mv kwrt-packages/luci-app-autoreboot luci-app-autoreboot
-        mv kwrt-packages/luci-app-diskman luci-app-diskman
-        mv kwrt-packages/luci-app-dnsfilter luci-app-dnsfilter
-        mv kwrt-packages/luci-app-homeproxy luci-app-homeproxy
-        mv kwrt-packages/luci-app-mosdns luci-app-mosdns
-        mv kwrt-packages/luci-app-nfs luci-app-nfs
-        mv kwrt-packages/luci-app-openvpn-server luci-app-openvpn-server
-        mv kwrt-packages/luci-app-quickstart luci-app-quickstart
-        mv kwrt-packages/luci-app-store luci-app-store
-        mv kwrt-packages/luci-app-systools luci-app-systools
-        mv kwrt-packages/luci-app-usb-printer luci-app-usb-printer
+        for dir in luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer; do
+          if [[ "$(diff -qr kwrt-packages/$dir $dir)" ]]; then
+            echo "Changes detected in $dir, syncing..."
+            rm -rf $dir
+            mv kwrt-packages/$dir $dir
+          else
+            echo "No changes detected in $dir, skipping..."
+          fi
+        done
         rm -rf kwrt-packages
 
-    - name: Clone luci-app-qbittorrent
+    - name: Clone luci-app-qbittorrent and sync if changed
       run: |
-        git clone --depth=1 https://github.com/sbwml/luci-app-qbittorrent.git 
+        git clone --depth=1 https://github.com/sbwml/luci-app-qbittorrent.git temp_luci-app-qbittorrent
+        if [[ "$(diff -qr luci-app-qbittorrent temp_luci-app-qbittorrent)" ]]; then
+          echo "Changes detected in luci-app-qbittorrent, syncing..."
+          rm -rf luci-app-qbittorrent
+          mv temp_luci-app-qbittorrent luci-app-qbittorrent
+        else
+          echo "No changes detected in luci-app-qbittorrent, skipping..."
+          rm -rf temp_luci-app-qbittorrent
+        fi
+
     - name: Commit changes (if any)
       run: |
         git add .
         git diff --cached --quiet || git commit -m "Sync external repositories"
         git push
-
-    - name: Commit changes (if any)
-      run: |
-        git add .
-        git diff --cached --quiet || git commit -m "Sync external repositories"
-        git push https://x-access-token:${{ secrets.MY_PAT_TOKEN }}@github.com/harryzhaozy/luci-packages.git main
+        
+    #- name: Commit changes (if any)
+    #  run: |
+    #    git add .
+    #    git diff --cached --quiet || git commit -m "Sync external repositories"
+    #    git push https://x-access-token:${{ secrets.MY_PAT_TOKEN }}@github.com/harryzhaozy/luci-packages.git main
 
    
