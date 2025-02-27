@@ -1,0 +1,94 @@
+name: Sync External Repositories
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *'  # 每天运行一次，你可以根据需要修改频率
+
+jobs:
+  sync_repositories:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout current repository
+      uses: actions/checkout@v3
+
+  
+    - name: Clone and sync repositories
+      run: |
+        # Define the external repositories you want to clone
+        repos=(
+          "https://github.com/kiddin9/kwrt-packages"
+          "luci-app-accesscontrol"
+          "luci-app-airconnect"
+          "luci-app-airplay2"
+          "luci-app-argon-config"
+          "luci-app-autoreboot"
+          "luci-app-diskman"
+          "luci-app-dnsfilter"
+          "luci-app-homeproxy"
+          "luci-app-mosdns"
+          "luci-app-nfs"
+          "luci-app-openvpn-server"
+          "luci-app-quickstart"
+          "luci-app-store"
+          "luci-app-systools"
+          "luci-app-usb-printer"
+        )
+
+        # Temporary directory for cloning the repositories
+        temp_dir=$(mktemp -d)
+
+        # Clone the external repositories (first repository is different as it's an external URL)
+        git clone --depth=1 ${repos[0]} $temp_dir/kwrt-packages
+        cd $temp_dir/kwrt-packages
+
+        # Enable sparse-checkout to only fetch specific directories
+        git sparse-checkout init --cone
+
+        for repo_dir in "${repos[@]:1}"; do
+          # Set sparse-checkout to include only the specific directory
+          git sparse-checkout set "$repo_dir"
+
+          # Create corresponding directory in the current repository
+          target_dir="../$repo_dir"
+          if [ ! -d "$target_dir" ]; then
+            echo "Creating directory $target_dir"
+            mkdir -p "$target_dir"
+          fi
+
+          # Sync the contents from temporary directory to the target directory
+          echo "Syncing $repo_dir to $target_dir"
+          rsync -av --exclude='.git' ./$repo_dir/ $target_dir/
+
+          # Reset sparse-checkout to sync the next directory
+          git sparse-checkout disable
+        done
+
+        # For the `luci-app-qbittorrent` repository, we handle it separately since it's an external repo
+        echo "Cloning luci-app-qbittorrent"
+        git clone --depth=1 https://github.com/sbwml/luci-app-qbittorrent.git $temp_dir/luci-app-qbittorrent
+
+        # Create target directory for luci-app-qbittorrent
+        target_dir="../luci-app-qbittorrent"
+        if [ ! -d "$target_dir" ]; then
+          echo "Creating directory $target_dir"
+          mkdir -p "$target_dir"
+        fi
+
+        # Sync the contents from the `luci-app-qbittorrent` directory to the target directory
+        echo "Syncing luci-app-qbittorrent to $target_dir"
+        rsync -av --exclude='.git' $temp_dir/luci-app-qbittorrent/ $target_dir/
+
+    
+    - name: Commit changes (if any)
+      run: |
+        git add .
+        git diff --cached --quiet || git commit -m "Sync external repositories"
+        git push https://x-access-token:${{ secrets.MY_PAT_TOKEN }}@github.com/harryzhaozy/luci-packages.git main
+
+    - name: Clean up temporary directory
+      run: |
+        rm -rf $temp_dir
