@@ -14,6 +14,11 @@ jobs:
     steps:
     - name: Checkout current repository
       uses: actions/checkout@v3
+       
+    - name: Set Git user info
+      run: |
+        git config user.name "harryzhaozy"
+        git config user.email "harryzhaozy@hotmail.com"
 
     - name: Clone and sparse checkout kwrt-packages
       run: |
