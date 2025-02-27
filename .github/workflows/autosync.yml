@@ -19,14 +19,15 @@ jobs:
       run: |
         git config user.name "harryzhaozy"
         git config user.email "harryzhaozy@hotmail.com"
-    - name: Remove submodule luci-app-qbittorrent (if exists)
-      run: |
-        git submodule deinit -f luci-app-qbittorrent || true
-        rm -rf .git/modules/luci-app-qbittorrent || true
-        git rm -f luci-app-qbittorrent || true
-        rm -rf luci-app-qbittorrent || true
-        git commit -m "Remove submodule luci-app-qbittorrent" --allow-empty || true
-        git push || true
+    
+    #- name: Remove submodule luci-app-qbittorrent (if exists)
+    #  run: |
+    #    git submodule deinit -f luci-app-qbittorrent || true
+    #    rm -rf .git/modules/luci-app-qbittorrent || true
+    #    git rm -f luci-app-qbittorrent || true
+     #   rm -rf luci-app-qbittorrent || true
+     #   git commit -m "Remove submodule luci-app-qbittorrent" --allow-empty || true
+     #   git push || true
 
     - name: Clone and sparse checkout kwrt-packages
       run: |
