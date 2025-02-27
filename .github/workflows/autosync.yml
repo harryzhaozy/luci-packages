@@ -15,20 +15,12 @@ jobs:
     - name: Checkout current repository
       uses: actions/checkout@v3
     
-    - name: Set Git user info
-      run: |
-        git config user.name "harryzhaozy"
-        git config user.email "harryzhaozy@hotmail.com"
+    #- name: Set Git user info
+    #  run: |
+    #    git config user.name "harryzhaozy"
+    #    git config user.email "harryzhaozy@hotmail.com"
 
-    - name: Remove submodule luci-app-qbittorrent (if exists)
-      run: |
-        git submodule deinit -f luci-app-qbittorrent || true
-        rm -rf .git/modules/luci-app-qbittorrent || true
-        git rm -f luci-app-qbittorrent || true
-        rm -rf luci-app-qbittorrent || true
-        git commit -m "Remove submodule luci-app-qbittorrent" --allow-empty || true
-        git push || true
-
+   
     - name: Clone and sparse checkout kwrt-packages
       run: |
         git clone --depth=1 https://github.com/kiddin9/kwrt-packages.git kwrt-packages
@@ -71,17 +63,17 @@ jobs:
         done
         rm -rf temp_luci-app-qbittorrent
 
-    - name: Commit changes (if any)
-      run: |
-        git add .
-        git diff --cached --quiet || git commit -m "Sync external repositories"
-        git push
-   
-        
     #- name: Commit changes (if any)
     #  run: |
     #    git add .
     #    git diff --cached --quiet || git commit -m "Sync external repositories"
-    #    git push https://x-access-token:${{ secrets.MY_PAT_TOKEN }}@github.com/harryzhaozy/luci-packages.git main
+    #    git push
+   
+        
+    - name: Commit changes (if any)
+      run: |
+        git add .
+        git diff --cached --quiet || git commit -m "Sync external repositories"
+        git push https://x-access-token:${{ secrets.MY_PAT_TOKEN }}@github.com/harryzhaozy/luci-packages.git main
 
    
