@@ -26,9 +26,9 @@ jobs:
         git clone --depth=1 https://github.com/kiddin9/kwrt-packages.git kwrt-packages
         cd kwrt-packages
         git sparse-checkout init --cone
-        git sparse-checkout set luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer
+        git sparse-checkout set luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server openvpn-dns-hotplug luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer
         cd ..
-        for dir in luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer; do
+        for dir in luci-app-accesscontrol luci-app-airconnect luci-app-airplay2 luci-app-argon-config luci-app-autoreboot luci-app-diskman luci-app-dnsfilter luci-app-homeproxy luci-app-mosdns luci-app-nfs luci-app-openvpn-server openvpn-dns-hotplug luci-app-quickstart luci-app-store luci-app-systools luci-app-usb-printer; do
           if [ -d "$dir" ]; then
             if [[ "$(diff -qr kwrt-packages/$dir $dir)" ]]; then
               echo "Changes detected in $dir, syncing..."
