@@ -1,1 +1,1 @@
-这是一个自己用的Openwrt的luci app packages
+这是一个自己用的Openwrt的luci app packages,包含kiddin9的部分包及sbwml的qbittorrent
