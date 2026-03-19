@@ -23,7 +23,7 @@ jobs:
    
     - name: Clone and sparse checkout kwrt-packages
       run: |
-        git clone --depth=1 https://github.com/kiddin9/kwrt-packages.git kwrt-packages
+        git clone --depth=1 https://github.com/kiddin9/op-packages.git kwrt-packages
         cd kwrt-packages
         git sparse-checkout init --cone
         #删除openvpn server,luci-app-openvpn-server openvpn-dns-hotplug
