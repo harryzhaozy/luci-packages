@@ -1,1 +1,2 @@
 这是一个自己用的Openwrt的luci app packages,包含kiddin9的部分包及sbwml的qbittorrent
+注意如果用于25.12版本的openwrt,修改一下quickstart及systools的make文件，好像smartdns也不正常
