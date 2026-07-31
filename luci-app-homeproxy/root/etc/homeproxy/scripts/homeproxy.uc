@@ -66,34 +66,37 @@ export function getTime(epoch) {
 
 };
 
-export function wGETResponse(url, ua) {
+export function wGET(url, ua) {
+	const result = wGETResult(url, ua);
+	return result?.stdout;
+};
+
+export function wGETResult(url, ua) {
 	if (!url || type(url) !== 'string')
 		return null;
 
 	if (!ua)
 		ua = 'Wget/1.21 (HomeProxy, like v2rayN)';
 
-	const output = executeCommand(`/usr/bin/wget -O- -S --user-agent ${shellQuote(ua)} --timeout=10 ${shellQuote(url)}`) || {};
-	return {
-		body: trim(output.stdout),
-		headers: output.stderr || '',
-		exitcode: output.exitcode
-	};
-};
+	let last_result = null;
 
-export function wGET(url, ua) {
-	return wGETResponse(url, ua)?.body;
-};
+	for (let extra in [ '', '-4' ]) {
+		const output = executeCommand(`/usr/bin/wget -q ${extra} -O- --user-agent ${shellQuote(ua)} --timeout=10 ${shellQuote(url)}`) || {};
 
-export function wGETHeaders(url, ua) {
-	if (!url || type(url) !== 'string')
-		return null;
+		output.stdout = trim(output.stdout);
+		output.stderr = trim(output.stderr);
+		last_result = output;
 
-	if (!ua)
-		ua = 'clash.meta';
+		if (output.exitcode === 0 && output.stdout)
+			return output;
+	}
 
-	const output = executeCommand(`/usr/bin/wget -O /dev/null -S --user-agent ${shellQuote(ua)} --timeout=10 ${shellQuote(url)}`) || {};
-	return output.stderr || '';
+	if (last_result) {
+		last_result.stdout = trim(last_result.stdout);
+		last_result.stderr = trim(last_result.stderr);
+	}
+
+	return last_result;
 };
 /* Utilities end */
 
