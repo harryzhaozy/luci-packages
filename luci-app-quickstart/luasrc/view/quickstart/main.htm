@@ -48,11 +48,12 @@
         }
       }
     setTimeout(() => {
-  	  const targetDiv = document.querySelector('div[style*="background-color: rgb(251, 245, 250)"]');
-  	  if (targetDiv) {
-  	  targetDiv.style.display = 'none';
+  	  document.querySelectorAll('.item_container .item').forEach(el => {
+  	  if (el.textContent.trim() === '软件源配置') {
+  	  el.remove(); // 或 el.style.display = 'none';
   	  }
-    }, 500);
+  	  });
+    }, 800);
     })();
 </script>
 <div id="app">
