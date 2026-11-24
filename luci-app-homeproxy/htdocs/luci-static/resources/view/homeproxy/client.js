@@ -10,6 +10,7 @@
 'require poll';
 'require rpc';
 'require uci';
+'require ui';
 'require validation';
 'require view';
 
@@ -72,6 +73,42 @@ let stubValidator = {
 	}
 };
 
+function isValidHttpURL(value) {
+	if (!value)
+		return false;
+
+	try {
+		let url = new URL(value);
+		return !!url.hostname && ['http:', 'https:'].includes(url.protocol);
+	} catch (e) {
+		return false;
+	}
+}
+
+/* DNS servers may be a bare IP or any protocol URL supported by sing-box
+ * (udp/tcp/tls/quic/https), so do not restrict the scheme to http(s). */
+function isValidDNSServer(value, allowNil) {
+	if (!value)
+		return false;
+	/* 'nil' only means "disable" for china_dns_server. */
+	if (value === 'wan' || (allowNil && value === 'nil'))
+		return true;
+	if (stubValidator.apply('ipaddr', value))
+		return true;
+
+	try {
+		let url = new URL(value.replace(/^[A-Za-z0-9+.-]+:\/\//, 'http://'));
+		let host = url.hostname.replace(/^\[|\]$/g, '');
+		return stubValidator.apply('hostname', host) || stubValidator.apply('ipaddr', host);
+	} catch (e) {
+		return false;
+	}
+}
+
+/* Modes that rely on the classic single main node. "custom" and "simple"
+ * both provide their own outbounds and must not show main-node widgets. */
+const legacyModes = /^(gfwlist|bypass_mainland_china|proxy_mainland_china|global)$/;
+
 return view.extend({
 	load() {
 		return Promise.all([
@@ -87,6 +124,7 @@ return view.extend({
 		let features = data[1],
 		    hosts = data[2]?.hosts;
 
+		/* Cache all configured proxy nodes, they will be called multiple times */
 		let proxy_nodes = {};
 		uci.sections(data[0], 'node', (res) => {
 			let nodeaddr = ((res.type === 'direct') ? res.override_address : res.address) || '',
@@ -124,7 +162,7 @@ return view.extend({
 		for (let i in proxy_nodes)
 			o.value(i, proxy_nodes[i]);
 		o.default = 'nil';
-		o.depends({'routing_mode': 'custom', '!reverse': true});
+		o.depends('routing_mode', legacyModes);
 		o.rmempty = false;
 
 		o = s.taboption('routing', hp.CBIStaticList, 'main_urltest_nodes', _('URLTest nodes'),
@@ -153,7 +191,7 @@ return view.extend({
 		for (let i in proxy_nodes)
 			o.value(i, proxy_nodes[i]);
 		o.default = 'nil';
-		o.depends({'routing_mode': /^((?!custom).)+$/, 'proxy_mode': /^((?!redirect$).)+$/});
+		o.depends({'routing_mode': legacyModes, 'proxy_mode': /^((?!redirect$).)+$/});
 		o.rmempty = false;
 
 		o = s.taboption('routing', hp.CBIStaticList, 'main_udp_urltest_nodes', _('URLTest nodes'),
@@ -187,7 +225,7 @@ return view.extend({
 		o.value('117.50.10.10', _('ThreatBook Public DNS (117.50.10.10)'));
 		o.default = '8.8.8.8';
 		o.rmempty = false;
-		o.depends({'routing_mode': 'custom', '!reverse': true});
+		o.depends('routing_mode', legacyModes);
 		o.validate = function(section_id, value) {
 			if (section_id && !['wan'].includes(value)) {
 				if (!value)
@@ -252,11 +290,12 @@ return view.extend({
 		o.value('bypass_mainland_china', _('Bypass mainland China'));
 		o.value('proxy_mainland_china', _('Only proxy mainland China'));
 		o.value('custom', _('Custom routing'));
+		o.value('simple', _('Simple routing'));
 		o.value('global', _('Global'));
 		o.default = 'bypass_mainland_china';
 		o.rmempty = false;
 		o.onchange = function(ev, section_id, value) {
-			if (section_id && value === 'custom')
+			if (section_id && ['custom', 'simple'].includes(value))
 				this.map.save(null, true);
 		}
 
@@ -272,7 +311,7 @@ return view.extend({
 					if (!stubValidator.apply('port', i) && !stubValidator.apply('portrange', i))
 						return _('Expecting: %s').format(_('valid port value'));
 					if (ports.includes(i))
-						return _('Port %s alrealy exists!').format(i);
+						return _('Port %s already exists!').format(i);
 					ports = ports.concat(i);
 				}
 			}
@@ -297,60 +336,273 @@ return view.extend({
 		o.default = o.enabled;
 		o.rmempty = false;
 
-		o = s.taboption('routing', form.Flag, 'cn_ip_fallback', _('CN-IP DNS fallback (sing-box 1.14)'),
-			_('When the main DNS returns a mainland China IP, re-resolve via China DNS using evaluate/match_response.'));
-		o.depends('routing_mode', 'bypass_mainland_china');
-		o.rmempty = false;
+		/* Simple routing settings start */
+		s.tab('simple', _('Simple Routing'));
 
-		o = s.taboption('routing', form.Flag, 'block_https_rr', _('Block HTTPS/SVCB DNS records'),
-			_('Answer HTTPS (type 65) and SVCB (type 64) queries with an empty response. Keeps clients off HTTPS-RR/ECH, which this DNS chain cannot serve through some proxies; disable it if ECH is wanted.'));
-		o.default = o.enabled;
-		o.rmempty = false;
+		o = s.taboption('simple', form.SectionValue, '_simple', form.NamedSection, 'simple', 'homeproxy');
+		o.depends('routing_mode', 'simple');
 
-		o = s.taboption('routing', form.ListValue, 'tun_dns_mode', _('TUN DNS mode (1.14)'),
-			_('Since sing-box 1.14 the default (Unset) behaves as hijack: sing-box sets the platform interface DNS and hijacks port 53. On OpenWrt this overlaps with the own dnsmasq/nftables DNS hijack of this plugin, so keep Disabled on a gateway unless you need sing-box to own TUN DNS.'));
-		o.value('default', _('Unset (default)'));
-		o.value('disabled', _('Disabled'));
-		o.value('native', _('Native'));
-		o.value('hijack', _('Hijack'));
-		o.depends('proxy_mode', 'redirect_tun');
-		o.depends('proxy_mode', 'tun');
-		o.default = 'default';
-		o.rmempty = true;
+		ss = o.subsection;
+		so = ss.option(form.ListValue, 'default_outbound', _('Default outbound'),
+			_('Outbound for traffic not matched by any routing rule below. Direct does not automatically proxy non-China traffic; add explicit rules for a bypass-mainland-China policy.'));
+		so.value('direct-out', _('Direct'));
+		so.value('block-out', _('Block'));
+		for (let i in proxy_nodes)
+			so.value(i, proxy_nodes[i]);
+		so.default = 'direct-out';
+		so.rmempty = false;
 
-		o = s.taboption('routing', form.DynamicList, 'tun_dns_address', _('TUN DNS addresses (1.14)'));
-		o.datatype = 'ipaddr';
-		o.depends({'proxy_mode': /^((?!custom).)+$/, 'tun_dns_mode': /^(disabled|native|hijack)$/});
-		o.modalonly = true;
+		so = ss.option(form.Value, 'dns_server', _('DNS server'),
+			_('Remote DNS server used through a proxy node. Support UDP, TCP, DoH, DoQ, DoT.'));
+		so.value('wan', _('WAN DNS (read from interface)'));
+		so.value('1.1.1.1', _('CloudFlare Public DNS (1.1.1.1)'));
+		so.value('8.8.8.8', _('Google Public DNS (8.8.8.8)'));
+		so.value('223.5.5.5', _('Aliyun Public DNS (223.5.5.5)'));
+		so.default = '8.8.8.8';
+		so.rmempty = false;
+		so.validate = function(section_id, value) {
+			if (section_id && value && !isValidDNSServer(value))
+				return _('Expecting: %s').format(_('valid DNS server address'));
 
-		o = s.taboption('routing', form.ListValue, 'udp_mapping', _('UDP NAT mapping (1.14)'));
-		o.value('endpoint_independent', _('Endpoint independent'));
-		o.value('address_dependent', _('Address dependent'));
-		o.value('address_and_port_dependent', _('Address and port dependent'));
-		o.description = _('sing-box default; recommended for home use (small NAT table, QUIC/game friendly). Choose stricter only for specific UDP issues.');
-		o.depends('proxy_mode', 'redirect_tproxy');
-		o.depends('proxy_mode', 'redirect_tun');
-		o.depends('proxy_mode', 'tun');
-		o.default = 'endpoint_independent';
-		o.rmempty = false;
+			return true;
+		}
 
-		o = s.taboption('routing', form.ListValue, 'udp_filtering', _('UDP NAT filtering (1.14)'));
-		o.value('endpoint_independent', _('Endpoint independent'));
-		o.value('address_dependent', _('Address dependent'));
-		o.value('address_and_port_dependent', _('Address and port dependent'));
-		o.description = _('sing-box default; recommended for home use (accepts replies from any remote after mapping). Choose stricter only for specific UDP issues.');
-		o.depends('proxy_mode', 'redirect_tproxy');
-		o.depends('proxy_mode', 'redirect_tun');
-		o.depends('proxy_mode', 'tun');
-		o.default = 'endpoint_independent';
-		o.rmempty = false;
+		so = ss.option(form.Value, 'china_dns_server', _('China DNS server'),
+			_('Domestic domains are resolved by this server over a direct connection. Set to Disable to use the DNS server above for all domains.'));
+		so.value('nil', _('Disable'));
+		so.value('wan', _('WAN DNS (read from interface)'));
+		so.value('223.5.5.5', _('Aliyun Public DNS (223.5.5.5)'));
+		so.value('119.29.29.29', _('Tencent Public DNS (119.29.29.29)'));
+		so.value('210.2.4.8', _('CNNIC Public DNS (210.2.4.8)'));
+		so.value('117.50.10.10', _('ThreatBook Public DNS (117.50.10.10)'));
+		so.rmempty = false;
+		so.validate = function(section_id, value) {
+			if (section_id && value && !isValidDNSServer(value, true))
+				return _('Expecting: %s').format(_('valid DNS server address'));
 
-		o = s.taboption('routing', form.Value, 'udp_nat_max', _('UDP NAT sessions max (1.14)'));
-		o.datatype = 'uinteger';
-		o.depends('proxy_mode', 'redirect_tproxy');
-		o.depends('proxy_mode', 'redirect_tun');
-		o.depends('proxy_mode', 'tun');
+			return true;
+		}
 
+		so = ss.option(form.Value, 'health_check_url', _('Health check URL'),
+			_('Used to test node availability. By default the first healthy node in the configured order is selected and kept until it fails; lowering the failback tolerance also allows switching to a faster node.'));
+		so.placeholder = 'https://www.gstatic.com/generate_204';
+		so.validate = function(section_id, value) {
+			if (section_id && value && !isValidHttpURL(value))
+				return _('Expecting: %s').format(_('valid URL'));
+
+			return true;
+		}
+
+		so = ss.option(form.Value, 'health_check_interval', _('Health check interval'),
+			_('In seconds. A failed node is re-evaluated on the next check; use the failback tolerance below to also switch back to a recovered primary.'));
+		so.datatype = 'uinteger';
+		so.placeholder = '180';
+		so.validate = function(section_id, value) {
+			if (section_id && value && (parseInt(value) < 10 || parseInt(value) > 1800))
+				return _('Expecting: %s').format(_('a value between 10 and 1800'));
+
+			return true;
+		}
+
+		so = ss.option(form.Value, 'failback_tolerance', _('Failback tolerance'),
+			_('In milliseconds. The default 30000 keeps the current node until it fails, so a recovered primary is not reselected automatically. Lower it, e.g. to 50, to let a node that is faster by more than this value take over, including a recovered primary. Small values may cause frequent switches and interrupt existing connections.'));
+		so.datatype = 'uinteger';
+		so.placeholder = '30000';
+		so.default = '30000';
+		so.validate = function(section_id, value) {
+			if (section_id && value && (parseInt(value) < 1 || parseInt(value) > 30000))
+				return _('Expecting: %s').format(_('a value between 1 and 30000'));
+
+			return true;
+		}
+
+		so = ss.option(form.Value, 'ruleset_url_base', _('Rule set URL base'),
+			_('Base URL used to resolve built-in rule set names from MetaCubeX/meta-rules-dat.'));
+		for (let i in hp.simple_ruleset_url_bases)
+			so.value(i, hp.simple_ruleset_url_bases[i]);
+		so.default = 'https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo';
+		so.rmempty = false;
+		so.validate = function(section_id, value) {
+			if (section_id && value && !isValidHttpURL(value))
+				return _('Expecting: %s').format(_('valid URL'));
+
+			return true;
+		}
+
+		so = ss.option(form.ListValue, 'ruleset_download_detour', _('Rule set download node'),
+			_('Node used to download remote rule sets. Automatic reuses the first routing outbound and its fallback nodes; Direct downloads without a proxy. This option no longer controls DNS.'));
+		so.value('', _('Automatic'));
+		so.value('direct-out', _('Direct'));
+		for (let i in proxy_nodes)
+			so.value(i, proxy_nodes[i]);
+		so.default = '';
+		so.rmempty = true;
+		so.optional = true;
+
+		so = ss.option(form.ListValue, 'remote_dns_detour', _('Remote DNS node'),
+			_('How remote DNS is reached. Automatic aligns DNS with the matching data outbound; WAN DNS only disables remote DNS and China DNS splitting; Direct reaches the configured remote DNS without a proxy.'));
+		so.value('', _('Automatic'));
+		so.value('wan', _('WAN DNS only'));
+		so.value('direct-out', _('Direct'));
+		for (let i in proxy_nodes)
+			so.value(i, proxy_nodes[i]);
+		so.default = '';
+		so.rmempty = true;
+		so.optional = true;
+
+		so = ss.option(form.Value, 'ruleset_update_interval', _('Rule set update interval'),
+			_('How often remote rule sets are refreshed, e.g. 1d.'));
+		so.placeholder = '1d';
+		so.validate = function(section_id, value) {
+			if (section_id && value && !/^\d+(ms|s|m|h|d)$/.test(value))
+				return _('Expecting: %s').format(_('a duration such as 1d or 12h'));
+
+			return true;
+		}
+
+		/* Simple DNS cache start */
+		so = ss.option(form.Value, 'dns_cache_size', _('DNS cache size'),
+			_('Number of DNS records cached by dnsmasq and sing-box. Larger values use more RAM but keep repeated lookups away from upstream DNS. Set to 0 to keep the current dnsmasq setting and the sing-box default.'));
+		so.datatype = 'range(0,10000)';
+		so.default = '4096';
+		so.rmempty = false;
+
+		so = ss.option(form.Flag, 'dns_optimistic', _('Optimistic DNS cache'),
+			_('Return expired cached answers immediately and refresh them in the background (requires sing-box 1.14+, default stale window: 3 days). This reduces lookup latency, but CDN or node changes may briefly keep using stale addresses.'));
+		so.default = so.disabled;
+		so.rmempty = false;
+		/* Simple DNS cache end */
+		/* Simple global settings end */
+
+		/* Simple routing rules start */
+		o = s.taboption('simple', form.SectionValue, '_simple_rule', form.GridSection, 'simple_rule');
+		o.depends('routing_mode', 'simple');
+
+		ss = o.subsection;
+		ss.addremove = true;
+		ss.rowcolors = true;
+		ss.sortable = true;
+		ss.nodescriptions = true;
+		ss.modaltitle = L.bind(hp.loadModalTitle, this, _('Routing rule'), _('Add a routing rule'), data[0]);
+		ss.sectiontitle = L.bind(hp.loadDefaultLabel, this, data[0]);
+
+		/* A row only needs a display label, so do not ask for a UCI identifier.
+		 * Generate a unique one on click and create the row immediately. */
+		ss.renderSectionAdd = function(extra_class) {
+			const self = this;
+			const createEl = E('div', { 'class': 'cbi-section-create' });
+
+			if (extra_class != null)
+				createEl.classList.add(extra_class);
+
+			createEl.appendChild(E('button', {
+				'class': 'cbi-button cbi-button-add',
+				'title': _('Add a routing rule'),
+				'click': ui.createHandlerFn(this, (ev) => {
+					let name, idx = 0;
+					do {
+						name = 'rule' + (++idx);
+					} while (uci.get(data[0], name));
+
+					return self.handleAdd(ev, name);
+				}),
+				'disabled': this.map.readonly || null
+			}, [ _('Add') ]));
+
+			return createEl;
+		};
+
+		so = ss.option(form.Value, 'label', _('Label'));
+		so.load = L.bind(hp.loadDefaultLabel, this, data[0]);
+		so.validate = L.bind(hp.validateUniqueValue, this, data[0], 'simple_rule', 'label');
+		so.modalonly = true;
+
+		so = ss.option(form.Flag, 'enabled', _('Enable'));
+		so.default = so.enabled;
+		so.rmempty = false;
+		so.editable = true;
+
+		so = ss.option(hp.CBIStaticList, 'rule_sets', _('Built-in rule sets'),
+			_('Rule sets from MetaCubeX/meta-rules-dat (sing/geo). Select several to route them all through the same node.'));
+		for (let i in hp.simple_rule_sets)
+			so.value(i, hp.simple_rule_sets[i]);
+		so.modalonly = true;
+		/* Keep the widget order as-is (new picks append at the bottom) and
+		 * only sort the values written to UCI when the form is saved. */
+		so.forcewrite = true;
+		const writeRuleSets = so.write;
+		so.write = function(section_id, value) {
+			return writeRuleSets.call(this, section_id,
+				hp.sortRuleSetValues(value, hp.simple_rule_sets));
+		};
+
+		so = ss.option(form.DynamicList, 'rule_set_urls', _('Custom rule sets'),
+			_('A full .srs URL, or an identifier such as geosite/netflix. A bare name is treated as a geosite rule set. For custom URLs, include /geosite/ in the path to enable DNS routing; GeoIP sets are only used for data routing.'));
+		so.validate = function(section_id, value) {
+			if (section_id && value) {
+				let values = Array.isArray(value) ? value : [value];
+				for (let v of values)
+					if (!isValidHttpURL(v) && !/^(?:(?:geosite|geoip)\/)?[A-Za-z0-9!@._-]+$/.test(v))
+						return _('Expecting: %s').format(_('valid URL or rule set name'));
+			}
+
+			return true;
+		}
+		so.modalonly = true;
+
+		so = ss.option(form.DynamicList, 'domains', _('Domains'),
+			_('Custom domains. Subdomains are matched automatically.'));
+		so.datatype = 'hostname';
+		so.modalonly = true;
+
+		so = ss.option(form.DynamicList, 'ip_cidrs', _('IP / CIDR'),
+			_('Custom IPv4 / IPv6 addresses or CIDR ranges.'));
+		so.datatype = 'or(ip4addr, cidr4, ip6addr, cidr6)';
+		so.modalonly = true;
+
+		so = ss.option(form.ListValue, 'node', _('Node'),
+			_('The primary node for this rule.'));
+		for (let i in proxy_nodes)
+			so.value(i, proxy_nodes[i]);
+		so.editable = true;
+		so.width = '16em';
+		/* Some themes shrink a select inside a table cell down to the arrow,
+		 * hiding the selected node name. Keep a readable width and expose the
+		 * full label as a tooltip. */
+		so.renderWidget = function(/* ... */) {
+			let widget = form.ListValue.prototype.renderWidget.apply(this, arguments);
+			let select = widget?.matches?.('select.cbi-input-select') ? widget :
+				widget?.querySelector?.('select.cbi-input-select');
+			if (select) {
+				select.style.minWidth = '14em';
+				let updateTitle = () => {
+					select.title = select.options[select.selectedIndex]?.text || '';
+				};
+				updateTitle();
+				select.addEventListener('change', updateTitle);
+			}
+			return widget;
+		};
+		/* The generator repairs dangling references (promotes a fallback or
+		 * fails closed), so do not block saving the whole form just because a
+		 * node was deleted meanwhile. */
+		so.validate = function(section_id, value) {
+			if (section_id && !value)
+				return _('Expecting: %s').format(_('non-empty value'));
+
+			return true;
+		}
+
+		so = ss.option(hp.CBIStaticList, 'fallback_nodes', _('Fallback nodes'),
+			_('Ordered fallback nodes. The next one is used when the previous one fails the health check; lowering the failback tolerance also allows switching back to a faster node.'));
+		for (let i in proxy_nodes)
+			so.value(i, proxy_nodes[i]);
+		so.modalonly = true;
+		/* Simple routing rules end */
+		/* Simple routing settings end */
+
+		/* Custom routing settings start */
+		/* Routing settings start */
 		o = s.taboption('routing', form.SectionValue, '_routing', form.NamedSection, 'routing', 'homeproxy');
 		o.depends('routing_mode', 'custom');
 
@@ -395,10 +647,6 @@ return view.extend({
 			_('Bypass mainland China traffic via firewall rules by default.'));
 		so.rmempty = false;
 
-		so = ss.option(form.Flag, 'find_neighbor', _('Find neighbor hosts'),
-			_('Enable neighbor resolution so rules can match LAN devices by hostname (1.14).'));
-		so.rmempty = false;
-
 		so = ss.option(form.ListValue, 'domain_strategy', _('Domain strategy'),
 			_('If set, the requested domain name will be resolved to IP before routing.'));
 		for (let i in hp.dns_strategy)
@@ -440,7 +688,9 @@ return view.extend({
 		}
 		so.default = 'default-dns';
 		so.rmempty = false;
+		/* Routing settings end */
 
+		/* Routing nodes start */
 		s.tab('routing_node', _('Routing Nodes'));
 		o = s.taboption('routing_node', form.SectionValue, '_routing_node', form.GridSection, 'routing_node');
 		o.depends('routing_mode', 'custom');
@@ -609,7 +859,9 @@ return view.extend({
 			_('Interrupt existing connections when the selected outbound has changed.'));
 		so.depends('node', 'urltest');
 		so.modalonly = true;
+		/* Routing nodes end */
 
+		/* Routing rules start */
 		s.tab('routing_rule', _('Routing Rules'));
 		o = s.taboption('routing_rule', form.SectionValue, '_routing_rule', form.GridSection, 'routing_rule');
 		o.depends('routing_mode', 'custom');
@@ -690,7 +942,7 @@ return view.extend({
 		so.modalonly = true;
 
 		so = ss.taboption('field_other', hp.CBIStaticList, 'rule_set', _('Rule set'),
-			_('Match rule set. Since 1.14: a rule-set holding a single default rule is merged into this rule; any other rule-set matches as an OR collection.'));
+			_('Match rule set.'));
 		so.load = function(section_id) {
 			delete this.keylist;
 			delete this.vallist;
@@ -792,25 +1044,6 @@ return view.extend({
 		so.depends('tls_fragment', '1');
 		so.modalonly = true;
 
-		so = ss.taboption('field_other', form.Value, 'tls_spoof', _('TLS spoof SNI (1.14)'),
-			_('Inject a forged TLS ClientHello carrying this SNI before the real one to fool SNI-filtering middleboxes. Requires elevated privileges.'));
-		so.datatype = 'hostname';
-		so.depends('action', 'route');
-		so.depends('action', 'route-options');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.ListValue, 'tls_spoof_method', _('TLS spoof method (1.14)'),
-			_('How the forged segment is rejected by the real server.'));
-		so.value('', _('wrong-sequence (default)'));
-		so.value('wrong-checksum', _('wrong-checksum'));
-		so.value('wrong-ack', _('wrong-ack'));
-		so.value('wrong-md5', _('wrong-md5'));
-		so.value('wrong-timestamp', _('wrong-timestamp'));
-		so.depends('action', 'route');
-		so.depends('action', 'route-options');
-		so.depends('tls_spoof', /[\s\S]/);
-		so.modalonly = true;
-
 		so = ss.taboption('field_other', form.ListValue, 'resolve_server', _('DNS server'),
 			_('Specifies DNS server tag to use instead of selecting through DNS routing.'));
 		so.load = function(section_id) {
@@ -867,17 +1100,6 @@ return view.extend({
 		so.depends('action', 'resolve');
 		so.modalonly = true;
 
-		so = ss.taboption('field_other', form.Flag, 'resolve_disable_optimistic_cache', _('Disable optimistic cache'),
-			_('Disable optimistic DNS caching in this lookup (1.14).'));
-		so.depends('action', 'resolve');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Value, 'resolve_timeout', _('Query timeout'),
-			_('Override dns.timeout for this lookup, in seconds (1.14).'));
-		so.datatype = 'uinteger';
-		so.depends('action', 'resolve');
-		so.modalonly = true;
-
 		so = ss.taboption('field_host', form.DynamicList, 'domain', _('Domain name'),
 			_('Match full domain.'));
 		so.datatype = 'hostname';
@@ -911,15 +1133,6 @@ return view.extend({
 		so = ss.taboption('field_host', form.Flag, 'ip_is_private', _('Match private IP'));
 		so.modalonly = true;
 
-		so = ss.taboption('field_host', form.DynamicList, 'source_mac_address', _('Source MAC address'),
-			_('Match LAN device by MAC address.'));
-		so.datatype = 'macaddr';
-		so.modalonly = true;
-
-		so = ss.taboption('field_host', form.DynamicList, 'source_hostname', _('Source hostname'),
-			_('Match LAN device hostname via neighbor resolution; enable find_neighbor.'));
-		so.modalonly = true;
-
 		so = ss.taboption('field_port', form.DynamicList, 'source_port', _('Source port'),
 			_('Match source port.'));
 		so.datatype = 'port';
@@ -951,7 +1164,9 @@ return view.extend({
 		so = ss.taboption('fields_process', form.DynamicList, 'process_path_regex', _('Process path (regex)'),
 			_('Match process path using regular expression.'));
 		so.modalonly = true;
+		/* Routing rules end */
 
+		/* DNS settings start */
 		s.tab('dns', _('DNS Settings'));
 		o = s.taboption('dns', form.SectionValue, '_dns', form.NamedSection, 'dns', 'homeproxy');
 		o.depends('routing_mode', 'custom');
@@ -989,24 +1204,17 @@ return view.extend({
 			'If value is an IP address instead of prefix, <code>/32</code> or <code>/128</code> will be appended automatically.'));
 		so.datatype = 'or(cidr, ipaddr)';
 
-		so = ss.option(form.Flag, 'optimistic_cache', _('Optimistic DNS cache'),
-			_('Return expired cache immediately and refresh in background (sing-box 1.14).'));
-		so.depends('disable_cache', '0');
-		so.depends('disable_cache_expire', '0');
-		so.rmempty = false;
+		so = ss.option(form.Flag, 'cache_file_store_rdrc', _('Store RDRC'),
+			_('Store rejected DNS response cache.<br/>' +
+			'The check results of <code>Address filter DNS rule items</code> will be cached until expiration.'));
 
-		so = ss.option(form.Value, 'optimistic_timeout', _('Optimistic cache timeout'),
-			_('Max time an expired entry may be served. Examples: 3d, 1h.'));
-
-		so = ss.option(form.Value, 'dns_timeout', _('DNS query timeout'),
-			_('Default timeout per DNS query in seconds (sing-box default: 10).'));
+		so = ss.option(form.Value, 'cache_file_rdrc_timeout', _('RDRC timeout'),
+			_('Timeout of rejected DNS response cache in seconds. <code>604800 (7d)</code> is used by default.'));
 		so.datatype = 'uinteger';
+		so.depends('cache_file_store_rdrc', '1');
+		/* DNS settings end */
 
-		so = ss.option(form.Flag, 'cache_file_store_dns', _('Store DNS cache'),
-			_('Persist DNS cache across restarts (sing-box 1.14, replaces Store RDRC).'));
-		so.depends('disable_cache', '0');
-		so.rmempty = false;
-
+		/* DNS servers start */
 		s.tab('dns_server', _('DNS Servers'));
 		o = s.taboption('dns_server', form.SectionValue, '_dns_server', form.GridSection, 'dns_server');
 		o.depends('routing_mode', 'custom');
@@ -1058,7 +1266,7 @@ return view.extend({
 		so.modalonly = true;
 
 		so = ss.option(form.DynamicList, 'headers', _('Headers'),
-			_('Additional headers to be sent to the DNS server, one <code>Name: value</code> per line.'));
+			_('Additional headers to be sent to the DNS server.'));
 		so.depends('type', 'https');
 		so.depends('type', 'h3');
 		so.modalonly = true;
@@ -1127,7 +1335,9 @@ return view.extend({
 		so.default = 'direct-out';
 		so.rmempty = false;
 		so.editable = true;
+		/* DNS servers end */
 
+		/* DNS rules start */
 		s.tab('dns_rule', _('DNS Rules'));
 		o = s.taboption('dns_rule', form.SectionValue, '_dns_rule', form.GridSection, 'dns_rule');
 		o.depends('routing_mode', 'custom');
@@ -1201,7 +1411,7 @@ return view.extend({
 		so.modalonly = true;
 
 		so = ss.taboption('field_other', hp.CBIStaticList, 'rule_set', _('Rule set'),
-			_('Match rule set. DNS: rules referencing rule-sets that contain query_type are incompatible with legacy address filters (ip_cidr / ip_is_private) — use match_response instead (1.14).'));
+			_('Match rule set.'));
 		so.load = function(section_id) {
 			delete this.keylist;
 			delete this.vallist;
@@ -1219,6 +1429,10 @@ return view.extend({
 			_('Make IP CIDR in rule sets match the source IP.'));
 		so.modalonly = true;
 
+		so = ss.taboption('field_other', form.Flag, 'rule_set_ip_cidr_accept_empty', _('Accept empty query response'),
+			_('Make IP CIDR in rule-sets accept empty query response.'));
+		so.modalonly = true;
+
 		so = ss.taboption('field_other', form.Flag, 'invert', _('Invert'),
 			_('Invert match result.'));
 		so.modalonly = true;
@@ -1228,7 +1442,6 @@ return view.extend({
 		so.value('route-options', _('Route options'));
 		so.value('reject', _('Reject'));
 		so.value('predefined', _('Predefined'));
-		so.value('evaluate', _('Evaluate (1.14)'));
 		so.default = 'route';
 		so.rmempty = false;
 		so.editable = true;
@@ -1251,7 +1464,13 @@ return view.extend({
 		so.rmempty = false;
 		so.editable = true;
 		so.depends('action', 'route');
-		so.depends('action', 'evaluate');
+
+		so = ss.taboption('field_other', form.ListValue, 'domain_strategy', _('Domain strategy'),
+			_('Set domain strategy for this query.'));
+		for (let i in hp.dns_strategy)
+			so.value(i, hp.dns_strategy[i]);
+		so.depends('action', 'route');
+		so.modalonly = true;
 
 		so = ss.taboption('field_other', form.Flag, 'dns_disable_cache', _('Disable dns cache'),
 			_('Disable cache and save cache in this query.'));
@@ -1272,66 +1491,6 @@ return view.extend({
 		so.datatype = 'or(cidr, ipaddr)';
 		so.depends('action', 'route');
 		so.depends('action', 'route-options');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Value, 'match_response', _('Match response'),
-			_('1 matches the latest untagged evaluate result; other values match an evaluate tag (1.14).'));
-		so.depends('action', 'route');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Value, 'evaluate_tag', _('Evaluate tag'),
-			_('Optional tag for this evaluate result.'));
-		so.depends('action', 'evaluate');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Flag, 'race', _('Race'),
-			_('Judge this response-dependent rule in parallel; first match wins (1.14).'));
-		so.depends({'action': 'route', 'match_response': /[\s\S]/});
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Flag, 'speculative', _('Speculative'),
-			_('Send the query before pending race rules are judged (1.14).'));
-		so.depends('action', 'route');
-		so.depends('action', 'evaluate');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Flag, 'disable_optimistic_cache', _('Disable optimistic cache'),
-			_('Disable optimistic DNS caching for this query.'));
-		so.depends('action', 'route');
-		so.depends('action', 'evaluate');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Value, 'dns_timeout', _('Query timeout'),
-			_('Override dns.timeout for this query, in seconds.'));
-		so.datatype = 'uinteger';
-		so.depends('action', 'route');
-		so.depends('action', 'evaluate');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.Flag, 'remove_client_subnet', _('Remove EDNS client subnet'),
-			_('Remove the edns0-subnet record from the query (1.14).'));
-		so.depends('action', 'route');
-		so.depends('action', 'evaluate');
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.ListValue, 'response_rcode', _('Response RCode'),
-			_('Match the evaluated response code (requires match_response).'));
-		for (let rc of [ 'NOERROR', 'FORMERR', 'SERVFAIL', 'NXDOMAIN', 'NOTIMP', 'REFUSED' ])
-			so.value(rc);
-		so.depends({'action': 'route', 'match_response': /[\s\S]/});
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.DynamicList, 'response_answer', _('Response answer'),
-			_('Text DNS records to match in the evaluated answer.'));
-		so.depends({'action': 'route', 'match_response': /[\s\S]/});
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.DynamicList, 'response_ns', _('Response NS'));
-		so.depends({'action': 'route', 'match_response': /[\s\S]/});
-		so.modalonly = true;
-
-		so = ss.taboption('field_other', form.DynamicList, 'response_extra', _('Response extra'));
-		so.depends({'action': 'route', 'match_response': /[\s\S]/});
 		so.modalonly = true;
 
 		so = ss.taboption('field_other', form.ListValue, 'reject_method', _('Method'));
@@ -1400,30 +1559,12 @@ return view.extend({
 		so.modalonly = true;
 
 		so = ss.taboption('field_host', form.DynamicList, 'ip_cidr', _('IP CIDR'),
-			_('Match IP CIDR with the evaluated response (needs match_response; old rules are auto-wrapped in 1.14).'));
+			_('Match IP CIDR with query response. Current rule will be skipped if not match.'));
 		so.datatype = 'or(cidr, ipaddr)';
 		so.modalonly = true;
 
 		so = ss.taboption('field_host', form.Flag, 'ip_is_private', _('Match private IP'),
-			_('Match private IP with the evaluated response (needs match_response).'));
-		so.modalonly = true;
-
-		so = ss.taboption('field_host', form.DynamicList, 'source_mac_address', _('Source MAC address'),
-			_('Match LAN device by MAC address.'));
-		so.datatype = 'macaddr';
-		so.modalonly = true;
-
-		so = ss.taboption('field_host', form.DynamicList, 'source_hostname', _('Source hostname'),
-			_('Match LAN device hostname via neighbor resolution; enable find_neighbor.'));
-		so.modalonly = true;
-
-		so = ss.taboption('field_host', form.Value, 'query_client_subnet', _('Query EDNS client subnet'),
-			_('Match the EDNS Client Subnet in the query (1.14).'));
-		so.datatype = 'or(cidr, ipaddr)';
-		so.modalonly = true;
-
-		so = ss.taboption('field_host', form.Flag, 'query_dnssec', _('Match DNSSEC OK'),
-			_('Match queries with the DNSSEC OK bit set (1.14).'));
+			_('Match private IP with query response.'));
 		so.modalonly = true;
 
 		so = ss.taboption('field_port', form.DynamicList, 'source_port', _('Source port'),
@@ -1457,7 +1598,10 @@ return view.extend({
 		so = ss.taboption('fields_process', form.DynamicList, 'process_path_regex', _('Process path (regex)'),
 			_('Match process path using regular expression.'));
 		so.modalonly = true;
+		/* DNS rules end */
+		/* Custom routing settings end */
 
+		/* Rule set settings start */
 		s.tab('ruleset', _('Rule Set'));
 		o = s.taboption('ruleset', form.SectionValue, '_ruleset', form.GridSection, 'ruleset');
 		o.depends('routing_mode', 'custom');
@@ -1505,9 +1649,6 @@ return view.extend({
 			if (section_id) {
 				if (!value)
 					return _('Expecting: %s').format(_('non-empty value'));
-				let extra = this.section.formvalue(section_id, 'extra_tags') || [];
-				if (extra.length && !value.includes('{tag}'))
-					return _('Expecting: %s').format(_('{tag} in URL when extra tags are used'));
 
 				try {
 					let url = new URL(value);
@@ -1526,7 +1667,7 @@ return view.extend({
 		so.modalonly = true;
 
 		so = ss.option(form.ListValue, 'outbound', _('Outbound'),
-			_('Outbound used to download this rule-set (via sing-box 1.14 http_clients).'));
+			_('Tag of the outbound to download rule set.'));
 		so.load = function(section_id) {
 			delete this.keylist;
 			delete this.vallist;
@@ -1542,38 +1683,19 @@ return view.extend({
 		}
 		so.depends('type', 'remote');
 
-		so = ss.option(form.Value, 'initial_path', _('Initial path'),
-			_('Local file with initial rule-set content; avoids blocking startup on first download (1.14).'));
-		so.datatype = 'file';
-		so.depends('type', 'remote');
-		so.modalonly = true;
-
-		so = ss.option(form.DynamicList, 'extra_tags', _('Extra tags'),
-			_('Extra rule-set tags sharing these options. Requires {tag} in path/url (1.14).'));
-		so.depends('type', 'remote');
-		so.validate = function(section_id, value) {
-			if (section_id && value && value.length) {
-				let rule_url = this.section.formvalue(section_id, 'url') || '';
-				if (!rule_url.includes('{tag}'))
-					return _('Expecting: %s').format(_('{tag} in URL when extra tags are used'));
-				let rule_initial = this.section.formvalue(section_id, 'initial_path') || '';
-				if (rule_initial && !rule_initial.includes('{tag}'))
-					return _('Expecting: %s').format(_('{tag} in initial path when extra tags are used'));
-			}
-			return true;
-		}
-		so.modalonly = true;
-
 		so = ss.option(form.Value, 'update_interval', _('Update interval'),
 			_('Update interval of rule set.'));
 		so.placeholder = '1d';
 		so.depends('type', 'remote');
+		/* Rule set settings end */
 
+		/* ACL settings start */
 		s.tab('control', _('Access Control'));
 
 		o = s.taboption('control', form.SectionValue, '_control', form.NamedSection, 'control', 'homeproxy');
 		ss = o.subsection;
 
+		/* Interface control start */
 		ss.tab('interface', _('Interface Control'));
 
 		so = ss.taboption('interface', widgets.DeviceSelect, 'listen_interfaces', _('Listen interfaces'),
@@ -1585,7 +1707,9 @@ return view.extend({
 			_('Bind outbound traffic to specific interface. Leave empty to auto detect.'));
 		so.multiple = false;
 		so.noaliases = true;
+		/* Interface control end */
 
+		/* LAN IP policy start */
 		ss.tab('lan_ip_policy', _('LAN IP Policy'));
 
 		so = ss.taboption('lan_ip_policy', form.ListValue, 'lan_proxy_mode', _('Proxy filter mode'));
@@ -1621,14 +1745,16 @@ return view.extend({
 		so = fwtool.addMACOption(ss, 'lan_ip_policy', 'lan_gaming_mode_mac_addrs', _('Gaming mode MAC-s'), null, hosts);
 
 		so = fwtool.addIPOption(ss, 'lan_ip_policy', 'lan_global_proxy_ipv4_ips', _('Global proxy IPv4 IP-s'), null, 'ipv4', hosts, true);
-		so.depends({'homeproxy.config.routing_mode': 'custom', '!reverse': true});
+		so.depends('homeproxy.config.routing_mode', legacyModes);
 
 		so = fwtool.addIPOption(ss, 'lan_ip_policy', 'lan_global_proxy_ipv6_ips', _('Global proxy IPv6 IP-s'), null, 'ipv6', hosts, true);
-		so.depends({'homeproxy.config.routing_mode': /^((?!custom).)+$/, 'homeproxy.config.ipv6_support': '1'});
+		so.depends({'homeproxy.config.routing_mode': legacyModes, 'homeproxy.config.ipv6_support': '1'});
 
 		so = fwtool.addMACOption(ss, 'lan_ip_policy', 'lan_global_proxy_mac_addrs', _('Global proxy MAC-s'), null, hosts);
-		so.depends({'homeproxy.config.routing_mode': 'custom', '!reverse': true});
+		so.depends('homeproxy.config.routing_mode', legacyModes);
+		/* LAN IP policy end */
 
+		/* WAN IP policy start */
 		ss.tab('wan_ip_policy', _('WAN IP Policy'));
 
 		so = ss.taboption('wan_ip_policy', form.DynamicList, 'wan_proxy_ipv4_ips', _('Proxy IPv4 IP-s'));
@@ -1644,14 +1770,16 @@ return view.extend({
 		so = ss.taboption('wan_ip_policy', form.DynamicList, 'wan_direct_ipv6_ips', _('Direct IPv6 IP-s'));
 		so.datatype = 'or(ip6addr, cidr6)';
 		so.depends('homeproxy.config.ipv6_support', '1');
+		/* WAN IP policy end */
 
+		/* Proxy domain list start */
 		ss.tab('proxy_domain_list', _('Proxy Domain List'));
 
 		so = ss.taboption('proxy_domain_list', form.TextValue, '_proxy_domain_list');
 		so.rows = 10;
 		so.monospace = true;
 		so.datatype = 'hostname';
-		so.depends({'homeproxy.config.routing_mode': 'custom', '!reverse': true});
+		so.depends('homeproxy.config.routing_mode', legacyModes);
 		so.load = function(/* ... */) {
 			return L.resolveDefault(callReadDomainList('proxy_list')).then((res) => {
 				return res.content;
@@ -1660,11 +1788,12 @@ return view.extend({
 		so.write = function(_section_id, value) {
 			return callWriteDomainList('proxy_list', value);
 		}
-		so.remove = function(/* ... */) {
-			let routing_mode = this.section.formvalue('config', 'routing_mode');
-			if (routing_mode !== 'custom')
-				return callWriteDomainList('proxy_list', '');
-			return true;
+		so.remove = function(section_id) {
+			/* Keep the file when depends() hides this field in custom/simple,
+			 * but still let the user clear it while the field is active. */
+			if (section_id && !this.isActive(section_id))
+				return true;
+			return callWriteDomainList('proxy_list', '');
 		}
 		so.validate = function(section_id, value) {
 			if (section_id && value)
@@ -1674,14 +1803,16 @@ return view.extend({
 
 			return true;
 		}
+		/* Proxy domain list end */
 
+		/* Direct domain list start */
 		ss.tab('direct_domain_list', _('Direct Domain List'));
 
 		so = ss.taboption('direct_domain_list', form.TextValue, '_direct_domain_list');
 		so.rows = 10;
 		so.monospace = true;
 		so.datatype = 'hostname';
-		so.depends({'homeproxy.config.routing_mode': 'custom', '!reverse': true});
+		so.depends('homeproxy.config.routing_mode', legacyModes);
 		so.load = function(/* ... */) {
 			return L.resolveDefault(callReadDomainList('direct_list')).then((res) => {
 				return res.content;
@@ -1690,11 +1821,12 @@ return view.extend({
 		so.write = function(_section_id, value) {
 			return callWriteDomainList('direct_list', value);
 		}
-		so.remove = function(/* ... */) {
-			let routing_mode = this.section.formvalue('config', 'routing_mode');
-			if (routing_mode !== 'custom')
-				return callWriteDomainList('direct_list', '');
-			return true;
+		so.remove = function(section_id) {
+			/* Keep the file when depends() hides this field in custom/simple,
+			 * but still let the user clear it while the field is active. */
+			if (section_id && !this.isActive(section_id))
+				return true;
+			return callWriteDomainList('direct_list', '');
 		}
 		so.validate = function(section_id, value) {
 			if (section_id && value)
@@ -1704,26 +1836,8 @@ return view.extend({
 
 			return true;
 		}
-
-		s.tab('dns_cache', _('DNS Cache (1.14)'));
-		o = s.taboption('dns_cache', form.SectionValue, '_dns_cache', form.NamedSection, 'dns', 'homeproxy');
-		o.depends({'routing_mode': 'custom', '!reverse': true});
-		ss = o.subsection;
-
-		so = ss.option(form.Flag, 'optimistic_cache', _('Optimistic DNS cache'),
-			_('Return expired cache immediately and refresh in background (sing-box 1.14).'));
-		so.rmempty = false;
-
-		so = ss.option(form.Value, 'optimistic_timeout', _('Optimistic cache timeout'),
-			_('Max time an expired entry may be served. Examples: 3d, 1h.'));
-
-		so = ss.option(form.Value, 'dns_timeout', _('DNS query timeout'),
-			_('Default timeout per DNS query in seconds (sing-box default: 10).'));
-		so.datatype = 'uinteger';
-
-		so = ss.option(form.Flag, 'cache_file_store_dns', _('Store DNS cache'),
-			_('Persist DNS cache across restarts (replaces Store RDRC).'));
-		so.rmempty = false;
+		/* Direct domain list end */
+		/* ACL settings end */
 
 		return m.render();
 	}
