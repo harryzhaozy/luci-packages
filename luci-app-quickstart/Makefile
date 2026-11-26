@@ -6,12 +6,12 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=LuCI support for quickstart 
-LUCI_DEPENDS:=+quickstart +luci-app-ttyd +luci-i18n-ttyd-zh-cn
+LUCI_DEPENDS:=+quickstart +luci-app-ttyd
 LUCI_PKGARCH:=all
 
 PKG_VERSION:=0.17.1-rc20261028-r3
 # PKG_RELEASE MUST be empty for luci.mk
-PKG_RELEASE:=45
+PKG_RELEASE:=50
 
 ifeq ($(CONFIG_USE_APK),y)
 PKG_VERSION:=$(subst -rc,_rc,$(PKG_VERSION))

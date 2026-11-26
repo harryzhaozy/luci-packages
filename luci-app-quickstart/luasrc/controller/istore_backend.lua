@@ -10,7 +10,7 @@ local util = require "luci.util"
 module("luci.controller.istore_backend", package.seeall)
 
 local BLOCKSIZE = 2048
-local ISTOREOS_PORT = 3038
+local ISTOREOS_SOCKET = "/var/run/quickstart/http.sock"
 
 function index()
     entry({"istore"}, call("istore_backend")).leaf=true
@@ -107,10 +107,17 @@ local function chunksource(sock, buffer)
 end
 
 function istore_backend() 
-  local sock = nixio.connect("127.0.0.1", ISTOREOS_PORT) 
+  local sock = nixio.socket("unix", "stream")
+  if sock and not sock:connect(ISTOREOS_SOCKET) then
+    sock:close()
+	sock = nil
+  end
   if not sock then
-    http.status(500, "connect failed")
-    return
+	sock = nixio.connect("127.0.0.1", 3038)
+  end
+  if not sock then
+	http.status(500, "connect failed")
+	return
   end
   local input = {}
   input[#input+1] = http.getenv("REQUEST_METHOD") .. " " .. http.getenv("REQUEST_URI") .. " HTTP/1.1"
